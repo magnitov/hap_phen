@@ -1,0 +1,100 @@
+---
+title: "tSNE"
+author: "Robin H. van der Weide"
+date: "30 December 2015"
+output: html_document
+---
+```{r}
+library(dplyr)
+library(tsne)
+library(SNPRelate)
+library(reshape2)
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+library(patchwork)
+
+umap_axis <- ggh4x::guide_axis_truncated(
+  trunc_lower = unit(0, "npc"),
+  trunc_upper = unit(5, "mm")
+)
+core_theme_elements <- list(theme(aspect.ratio = 1),
+                            theme(axis.line = element_line(arrow = arrow(type = 'closed', length = unit(1, "mm"))),
+                                  axis.title = element_text(hjust = 0)), 
+                            scale_x_continuous(breaks = NULL) ,
+                            scale_y_continuous(breaks = NULL))
+```
+
+Converting VCF of 1000 genomes phase3 into gds
+```{r eval=T,cache=TRUE}
+chr1phase3vcf.fn <- "~ALL.chr1.phase3_shapeit2_mvncall_integrated_v5a.20130502.genotypes_ld0.2.vcf"
+chr1phase3vcf.gds <- "ALL.chr1.phase3_shapeit2_mvncall_integrated_v5a.20130502.genotypes_ld0.2.gds"
+
+snpgdsVCF2GDS(chr1phase3vcf.fn, chr1phase3vcf.gds, method="biallelic.only")
+```
+
+Perform PCA on GDS:
+```{r eval=T, cashe = T}
+snpset.id <- unlist(snpgdsLDpruning(genofile, ld.threshold = 0.2))
+pca_ld.2 <- snpgdsPCA(genofile, snp.id=snpset.id, num.thread=NA,need.genmat = T)
+```
+
+
+Get sample-, population- and continent-codes and make dataframe with:
+
+1. sample-id
+2. population-id
+3. super-population-id
+4. pca eigenvector 1
+5. pca eigenvector 2
+6. pca eigenvector 3
+```{r eval=T}
+sample.id <- sub("_.*", "", pca_ld.2$sample.id) 
+
+pop_code <- read.delim("phase3_samplename-country.tsv") #df with sample-id and pop-id
+pop_cont <- read.delim("pop_cont.tsv", header=FALSE) #df with  pop-idand cont-id
+
+pops <- pop_code[match(sample.id, pop_code[,1]),2] 
+conts <- pop_cont[match(pops, pop_cont[,1]),2]
+
+dataSet <- data.frame(sample.id, pops, conts, pca_ld.2$eigenvect[,1], pca_ld.2$eigenvect[,2], pca_ld.2$eigenvect[,3])
+
+colnames(dataSet) <- c("sample","population", "superPopulation","EV1","EV2","EV3")
+```
+
+```{r eval=T, cashe = T}
+pca_ld.2.tsne <- tsne(pca_ld.2$genmat)
+```
+
+```{r}
+dataSet$TSNE1 <- pca_ld.2.tsne[,1]
+dataSet$TSNE2 <- pca_ld.2.tsne[,2]
+```
+
+
+```{r}
+chosenSamples <- c("HG01241","HG02601","NA18983","HG03464","NA12878")
+
+dataSet$lijn_naam <- dataSet$sample
+dataSet$lijn_naam[!dataSet$sample %in% chosenSamples] <- ''
+
+ggplot(dataSet, aes(x= TSNE1, y= TSNE2, colour = factor(superPopulation), fill = factor(superPopulation))) +
+  geom_point(size = 2.5/.pt, alpha = 0) +
+  see::geom_point2(size = 2/.pt,stroke = 0, data = dataSet[dataSet$lijn_naam == '',]) + 
+  see::geom_point2(size = 3/.pt, shape = 21, col = 'black', stroke = 2/.pt, data = dataSet[dataSet$lijn_naam != '',]) + 
+  ggrepel::geom_text_repel(data = dataSet[dataSet$lijn_naam != '',], mapping = aes(label = lijn_naam), 
+                           min.segment.length = 0, force = 10, 
+                           point.padding = .2,box.padding = 1,size = 6/.pt, col = 'black') + 
+  guides(x = umap_axis, y = umap_axis, fill = 'none',
+         colour = guide_legend(override.aes = list(size = 3/.pt, alpha = 1),title = "Super-population")) +
+  scale_fill_manual(values = colorspace::desaturate(amount = .5, brewer.pal(n = 5, "Pastel1"))) +
+  theme(legend.position = c(1,1), legend.key = element_blank(),
+        axis.line = element_blank(),
+        legend.background = element_blank(), 
+        legend.justification = c(0,1),
+        legend.key.size = unit(8,'pt')) +
+  theme(aspect.ratio = 1) +
+  labs(x = 't-SNE dim 1', y = "t-SNE dim 2") +
+  scale_color_manual(values = colorspace::desaturate(amount = .5, brewer.pal(n = 5, "Pastel1"))) +
+  core_theme_elements
+```
